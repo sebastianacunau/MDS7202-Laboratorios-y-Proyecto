@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/sebastianacunaurzua/Documents/GitHub/MDS7202-Laboratorios-y-Proyecto/Laboratorios/Lab%208%20-%20MLOps/mlruns/323239591037903483/6edb1bac658746c399d5273160480a4c/artifacts
+end_time: 1749010167079
+entry_point_name: ''
+experiment_id: '323239591037903483'
+lifecycle_stage: active
+run_id: 6edb1bac658746c399d5273160480a4c
+run_name: Visualizacion de Optimizacion con Optuna
+run_uuid: 6edb1bac658746c399d5273160480a4c
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1749010145757
+status: 3
+tags: []
+user_id: sebastianacunaurzua

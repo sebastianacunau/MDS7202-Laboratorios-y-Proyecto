@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/sebastianacunaurzua/Documents/GitHub/MDS7202-Laboratorios-y-Proyecto/Laboratorios/Lab%208%20-%20MLOps/mlruns/323239591037903483/5657c51d38f64325bd39579b21276347/artifacts
+end_time: 1749010170173
+entry_point_name: ''
+experiment_id: '323239591037903483'
+lifecycle_stage: active
+run_id: 5657c51d38f64325bd39579b21276347
+run_name: Mejor Modelo
+run_uuid: 5657c51d38f64325bd39579b21276347
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1749010168286
+status: 3
+tags: []
+user_id: sebastianacunaurzua

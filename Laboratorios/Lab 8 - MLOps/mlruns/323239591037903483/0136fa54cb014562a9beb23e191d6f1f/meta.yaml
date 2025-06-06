@@ -1,0 +1,15 @@
+artifact_uri: file:///Users/sebastianacunaurzua/Documents/GitHub/MDS7202-Laboratorios-y-Proyecto/Laboratorios/Lab%208%20-%20MLOps/mlruns/323239591037903483/0136fa54cb014562a9beb23e191d6f1f/artifacts
+end_time: 1749009910366
+entry_point_name: ''
+experiment_id: '323239591037903483'
+lifecycle_stage: active
+run_id: 0136fa54cb014562a9beb23e191d6f1f
+run_name: ' Trial de XGBoost # 7, con max_depth = 5.0000, learning_rate = 0.0046'
+run_uuid: 0136fa54cb014562a9beb23e191d6f1f
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1749009893949
+status: 3
+tags: []
+user_id: sebastianacunaurzua
