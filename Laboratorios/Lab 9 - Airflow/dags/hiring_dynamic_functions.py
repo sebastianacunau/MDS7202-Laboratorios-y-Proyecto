@@ -15,7 +15,7 @@ def create_folders(base_path="."):
     Crea una carpeta con la fecha de hoy (YYYYMMDD_HHMMSS) y subcarpetas 'raw', 'splits' y 'models'.
     Retorna la ruta absoluta de la carpeta principal creada.
     """
-    fecha = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fecha = datetime.now(tz='America/Santiago').strftime("%Y%m%d_%H%M%S")
     main_folder = os.path.join(base_path, fecha)
     os.makedirs(main_folder, exist_ok=True)
     for sub in ["raw", "preprocessed", "splits", "models"]:

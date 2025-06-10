@@ -10,63 +10,70 @@ import joblib
 import gradio as gr
 
 
-def create_folders(base_path="."):
+def create_folders(**kwargs):
     """
     Crea una carpeta con la fecha de hoy (YYYYMMDD_HHMMSS) y subcarpetas 'raw', 'splits' y 'models'.
     Retorna la ruta absoluta de la carpeta principal creada.
     """
-    fecha = datetime.now(tz='America/Santiago').strftime("%Y%m%d_%H%M%S")
-    main_folder = os.path.join(base_path, fecha)
+    ti = kwargs['ti']
+
+    # Obtener la fecha desde el contexto del DAG
+    fecha = kwargs['dag_run'].conf.get('start_date', datetime.now().strftime("%Y%m%d_%H%M%S"))
+
+    # Crear la carpeta principal con el nombre de la fecha
+    main_folder = os.path.join(ti.xcom_pull(key="base_path"), fecha)
     os.makedirs(main_folder, exist_ok=True)
+    
+    # Crear subcarpetas
     for sub in ["raw", "splits", "models"]:
         os.makedirs(os.path.join(main_folder, sub), exist_ok=True)
-    return main_folder
-
-def download_data(main_folder):
-    """
-    Descarga el archivo data_1.csv desde la URL proporcionada y lo guarda en main_folder/raw.
-    """
-    url = "https://gitlab.com/eduardomoyab/laboratorio-13/-/raw/main/files/data_1.csv"
-    raw_path = os.path.join(main_folder, "raw", "data_1.csv")
     
-    if not os.path.exists(raw_path):
-        df = pd.read_csv(url)
-        df.to_csv(raw_path, index=False)
-        print(f"Archivo descargado y guardado en: {raw_path}")
-    else:
-        print(f"El archivo ya existe en: {raw_path}")
+    # Guardar la ruta completa de la carpeta principal en XCom
+    ti.xcom_push(key='main_folder', value=main_folder)
 
-def split_data(main_folder):
+def split_data(**kwargs):
     """
     Lee el archivo data_1.csv desde main_folder/raw,
     divide los datos en train/test (80/20, stratify=HiringDecision, random_state=13),
     y guarda ambos datasets en main_folder/splits.
     """
+    ti = kwargs['ti']
+
+    # Obtener la ruta de la carpeta principal desde XCom
+    main_folder = ti.xcom_pull(task_ids='create_folders', key='main_folder')
+
+    # Leer el archivo data_1.csv desde la carpeta raw
     raw_path = os.path.join(main_folder, "raw", "data_1.csv")
     df = pd.read_csv(raw_path)
     
+    # Dividir los datos en entrenamiento y prueba
     X = df.drop(columns=["HiringDecision"])
     y = df["HiringDecision"]
     
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, stratify=y, random_state=13
-    )
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=13)
     
     train_df = X_train.copy()
     train_df["HiringDecision"] = y_train
     test_df = X_test.copy()
     test_df["HiringDecision"] = y_test
-
+    
+    # Guardar los datasets en la carpeta splits
     splits_path = os.path.join(main_folder, "splits")
     train_df.to_csv(os.path.join(splits_path, "train.csv"), index=False)
     test_df.to_csv(os.path.join(splits_path, "test.csv"), index=False)
 
-def preprocess_and_train(main_folder):
+def preprocess_and_train(**kwargs):
     """
     Lee train.csv y test.csv de main_folder/splits, crea un pipeline con ColumnTransformer y RandomForest,
     entrena el modelo y guarda el pipeline entrenado en main_folder/models/model.joblib
     """
+    ti = kwargs['ti']
+
+    # Obtener la ruta de la carpeta principal desde XCom
+    main_folder = ti.xcom_pull(task_ids='create_folders', key='main_folder')
     splits_path = os.path.join(main_folder, "splits")
+
+    # Leer los datasets de entrenamiento y prueba
     train_df = pd.read_csv(os.path.join(splits_path, "train.csv"))
     test_df = pd.read_csv(os.path.join(splits_path, "test.csv"))
 
@@ -75,16 +82,11 @@ def preprocess_and_train(main_folder):
     X_test = test_df.drop(columns=["HiringDecision"])
     y_test = test_df["HiringDecision"]
 
+    # Crear un pipeline (no se realiza preprocesamiento en este ejemplo, pues RF no lo necesita, pero se puede agregar)
     pipeline = Pipeline([
         ("classifier", RandomForestClassifier(random_state=13))
     ])
-
     pipeline.fit(X_train, y_train)
-    
-    # Guardar el pipeline entrenado
-    models_path = os.path.join(main_folder, "models")
-    model_path = os.path.join(models_path, "model.joblib")
-    joblib.dump(pipeline, model_path)
 
     # Calcular métricas en el conjunto de prueba
     y_pred = pipeline.predict(X_test)
@@ -93,22 +95,13 @@ def preprocess_and_train(main_folder):
     print(f"Accuracy en test: {accuracy:.4f}")
     print(f"F1-score (clase positiva=1) en test: {f1:.4f}")
 
-    return model_path
+    # Guardar el pipeline entrenado
+    models_path = os.path.join(main_folder, "models")
+    model_path = os.path.join(models_path, "model.joblib")
+    joblib.dump(pipeline, model_path)
 
-def get_latest_model_path(base_path="."):
-    """
-    Busca la carpeta más reciente en base_path y retorna el path al model.joblib dentro de models/
-    """
-    folders = [f for f in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, f))]
-    if not folders:
-        raise FileNotFoundError("No se encontraron carpetas de ejecuciones anteriores.")
-    folders.sort(key=lambda x: os.path.getmtime(os.path.join(base_path, x)), reverse=True)
-    latest_folder = os.path.join(base_path, folders[0])
-    model_path = os.path.join(latest_folder, "models", "model.joblib")
-    if not os.path.exists(model_path):
-        raise FileNotFoundError(f"No se encontró modelo en {model_path}")
-    return model_path
-
+    # Guardar el path del modelo en XCom para su uso posterior
+    ti.xcom_push(key='model_path', value=model_path)
 
 def predict(file,model_path):
 
@@ -120,9 +113,12 @@ def predict(file,model_path):
 
     return {'Predicción': labels[0]}
 
-def gradio_interface(base_path="."):
+def gradio_interface(**kwargs):
 
-    model_path = get_latest_model_path(base_path) #Completar con la ruta del modelo entrenado
+    ti = kwargs['ti']
+    model_path = ti.xcom_pull(task_ids='preprocess_and_train', key='model_path')
+    if not model_path:
+        raise ValueError("El modelo no ha sido entrenado o no se encontró la ruta del modelo.")
 
     interface = gr.Interface(
         fn=lambda file: predict(file, model_path),
