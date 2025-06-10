@@ -15,12 +15,26 @@ def create_folders(base_path="."):
     Crea una carpeta con la fecha de hoy (YYYYMMDD_HHMMSS) y subcarpetas 'raw', 'splits' y 'models'.
     Retorna la ruta absoluta de la carpeta principal creada.
     """
-    fecha = datetime.now().strftime("%Y%m%d_%H%M%S")
+    fecha = datetime.now(tz='America/Santiago').strftime("%Y%m%d_%H%M%S")
     main_folder = os.path.join(base_path, fecha)
     os.makedirs(main_folder, exist_ok=True)
     for sub in ["raw", "splits", "models"]:
         os.makedirs(os.path.join(main_folder, sub), exist_ok=True)
     return main_folder
+
+def download_data(main_folder):
+    """
+    Descarga el archivo data_1.csv desde la URL proporcionada y lo guarda en main_folder/raw.
+    """
+    url = "https://gitlab.com/eduardomoyab/laboratorio-13/-/raw/main/files/data_1.csv"
+    raw_path = os.path.join(main_folder, "raw", "data_1.csv")
+    
+    if not os.path.exists(raw_path):
+        df = pd.read_csv(url)
+        df.to_csv(raw_path, index=False)
+        print(f"Archivo descargado y guardado en: {raw_path}")
+    else:
+        print(f"El archivo ya existe en: {raw_path}")
 
 def split_data(main_folder):
     """
@@ -81,6 +95,20 @@ def preprocess_and_train(main_folder):
 
     return model_path
 
+def get_latest_model_path(base_path="."):
+    """
+    Busca la carpeta más reciente en base_path y retorna el path al model.joblib dentro de models/
+    """
+    folders = [f for f in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, f))]
+    if not folders:
+        raise FileNotFoundError("No se encontraron carpetas de ejecuciones anteriores.")
+    folders.sort(key=lambda x: os.path.getmtime(os.path.join(base_path, x)), reverse=True)
+    latest_folder = os.path.join(base_path, folders[0])
+    model_path = os.path.join(latest_folder, "models", "model.joblib")
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"No se encontró modelo en {model_path}")
+    return model_path
+
 
 def predict(file,model_path):
 
@@ -92,9 +120,9 @@ def predict(file,model_path):
 
     return {'Predicción': labels[0]}
 
-def gradio_interface():
+def gradio_interface(base_path="."):
 
-    model_path= ... #Completar con la ruta del modelo entrenado
+    model_path = get_latest_model_path(base_path) #Completar con la ruta del modelo entrenado
 
     interface = gr.Interface(
         fn=lambda file: predict(file, model_path),
