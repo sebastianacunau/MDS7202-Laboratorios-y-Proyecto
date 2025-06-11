@@ -6,7 +6,7 @@ from datetime import datetime
 from hiring_functions import create_folders, split_data, preprocess_and_train, predict, gradio_interface
 
 # Ruta base donde se crearán las carpetas de ejecución
-BASE_PATH = "/Users/sebastianacunau/airflow/ml_runs_lab9"
+BASE_PATH = "/root/airflow"
 
 default_args = {
     'owner': 'seba',
@@ -36,7 +36,7 @@ with DAG(
     task_download_dataset = BashOperator(
         task_id='download_data',
         bash_command="curl -o " 
-                    f"{ ti.xcom_pull(task_ids='crear_folders') }/raw/data_1.csv "
+                    "{{ ti.xcom_pull(task_ids='crear_folders', key='main_folder') }}/raw/data_1.csv "
                     "https://gitlab.com/eduardomoyab/laboratorio-13/-/raw/main/files/data_1.csv"
     )
 
@@ -56,7 +56,7 @@ with DAG(
 
     # Tarea 6: Lanzar la interfaz de Gradio
     task_gradio_interface = PythonOperator(
-        task_id="launch_gradio_interface",
+        task_id="gradio_interface",
         python_callable=gradio_interface,
         provide_context=True,
     )
