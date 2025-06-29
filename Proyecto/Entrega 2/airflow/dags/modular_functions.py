@@ -1,34 +1,62 @@
 import pandas as pd
 import os
 
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from XGBoost import XGBClassifier
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_curve, log_loss
+
 def retrieve_data(**kwargs):
     """
-    Recupera los datos de transacciones, clientes(?) y productos(?) desde ???? y los carga en DataFrames.
-    Retorna los DataFrames en un diccionario.
+    Recupera los datos de transacciones, clientes y productos desde el directorio de trabajo y los carga en DataFrames.
+    Se realiza un preprocesamiento básico para dejar el dataset agregado por semana y año,
+    y eliminar columnas con un único valor en los DataFrames de clientes y productos.
+    Retorna un DataFrame con todas las combinaciones cliente-producto-semana para realizar análisis.
     """
+    # Se recuperan los datos de transacciones, clientes y productos desde el directorio de trabajo.
     exec_date = kwargs.get('ds')
     
     print(f"Extrayendo datos para la fecha: {exec_date}")
 
     print("Extrayendo 'transacciones.parquet' ...")
-    transactions_path = os.path.join("raw", "transactions.parquet")
+    transactions_path = os.path.join("raw", "transacciones.parquet")
     transactions_df = pd.read_parquet(transactions_path)
 
-    print("Extrayendo 'customers.parquet' ...")
-    customers_path = os.path.join("raw", "clientes.parquet")
-    customers_df = pd.read_parquet(customers_path)
+    print("Extrayendo 'clientes.parquet' ...")
+    clients_path = os.path.join("raw", "clientes.parquet")
+    clients_df = pd.read_parquet(clients_path)
 
-    print("Extrayendo 'products.parquet' ...")
+    print("Extrayendo 'productos.parquet' ...")
     products_path = os.path.join("raw", "productos.parquet")
     products_df = pd.read_parquet(products_path)
     
     print("Datos extraídos correctamente.")
 
+    # Se eliminan columnas con un único valor en los DataFrames de clientes y productos
+    clients_df = clients_df.loc[:, clients_df.nunique() > 1]
+    products_df = products_df.loc[:, products_df.nunique() > 1]
+    
+    # Se agregan columnas de semana del año y año a transactions_df
+    transactions_df['purchase_date'] = pd.to_datetime(transactions_df['purchase_date'])
+    transactions_df['week_of_year'] = transactions_df['purchase_date'].dt.week
+    transactions_df['year'] = transactions_df['purchase_date'].dt.year
+
+    # Se realiza una agregación de transacciones por cliente, producto, semana y año
+    transactions_df = transactions_df.groupby(
+        ['customer_id', 'product_id', 'week_of_year', 'year']).agg(
+            quantity_ordered=('items', 'sum'),
+            orders_count=('order_id', 'nunique')
+        ).reset_index()
+    
     return {
-        "transactions": transactions_df,
-        "customers": customers_df,
-        "products": products_df
+        'transactions': transactions_df,
+        'customers': clients_df,
+        'products': products_df
     }
+    
 
 def standardize_and_prepare_data(**kwargs):
     """
@@ -42,8 +70,10 @@ def standardize_and_prepare_data(**kwargs):
     customers_df = ti.xcom_pull(task_ids='retrieve_data', key='customers')
     products_df = ti.xcom_pull(task_ids='retrieve_data', key='products')
 
-    # Aquí hay que hacer todo lo que se hizo en la entrega 1 para estandarizar y preparar los datos.
-    ...
+    # Se realiza un merge de los DataFrames de transacciones, clientes y productos, de modo que estén todas las 
+    # combinaciones cliente-producto-semana disponibles.
+    transactions_df = transactions_df.merge(products_df, on='product_id', how='left')
+    transactions_df = transactions_df.merge(customers_df, on='customer_id', how='left')
     
     print("Datos estandarizados y preparados correctamente.")
     
