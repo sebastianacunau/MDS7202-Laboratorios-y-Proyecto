@@ -8,7 +8,7 @@ from airflow.utils.dates import days_ago
 
 from datetime import datetime, timedelta
 
-from modular_functions import retrieve_data, standardize_and_prepare_data, detect_data_drift, optimize_model, train_model, interpret_model, evaluate_model
+from modular_functions import retrieve_data, standardize_and_prepare_data, detect_data_drift, choose_drift_branch, optimize_model, train_model, interpret_model, evaluate_model
 
 default_args = {
     'owner': 'deep_drinkers',
@@ -52,7 +52,7 @@ with DAG(
     # Tarea 4: Branching para decidir si se reentrena el modelo o no
     branch = BranchPythonOperator(
         task_id="branching",
-        python_callable=lambda ti: "retrain_model" if ti.xcom_pull(task_ids='detect_data_drift', key='drift_detected') else "skip_training",
+        python_callable=choose_drift_branch,
         provide_context=True,
     )
 

@@ -22,21 +22,21 @@ def retrieve_data(**kwargs):
     print(f"Extrayendo datos para la fecha: {exec_date}")
 
     print("Extrayendo 'transacciones.parquet' ...")
-    transactions_path = os.path.join("raw", "transacciones.parquet")
+    transactions_path = os.path.join("data", "transacciones.parquet")
     transactions_df = pd.read_parquet(transactions_path)
 
     print("Extrayendo 'clientes.parquet' ...")
-    clients_path = os.path.join("raw", "clientes.parquet")
-    clients_df = pd.read_parquet(clients_path)
+    customers_path = os.path.join("data", "clientes.parquet")
+    customers_df = pd.read_parquet(customers_path)
 
     print("Extrayendo 'productos.parquet' ...")
-    products_path = os.path.join("raw", "productos.parquet")
+    products_path = os.path.join("data", "productos.parquet")
     products_df = pd.read_parquet(products_path)
     
     print("Datos extraídos correctamente.")
 
     # Se eliminan columnas con un único valor en los DataFrames de clientes y productos
-    clients_df = clients_df.loc[:, clients_df.nunique() > 1]
+    customers_df = customers_df.loc[:, customers_df.nunique() > 1]
     products_df = products_df.loc[:, products_df.nunique() > 1]
     
     # Se agregan columnas de semana del año y año a transactions_df
@@ -53,7 +53,7 @@ def retrieve_data(**kwargs):
     
     return {
         'transactions': transactions_df,
-        'customers': clients_df,
+        'customers': customers_df,
         'products': products_df
     }
     
@@ -72,12 +72,32 @@ def standardize_and_prepare_data(**kwargs):
 
     # Se realiza un merge de los DataFrames de transacciones, clientes y productos, de modo que estén todas las 
     # combinaciones cliente-producto-semana disponibles.
-    transactions_df = transactions_df.merge(products_df, on='product_id', how='left')
-    transactions_df = transactions_df.merge(customers_df, on='customer_id', how='left')
+    customer_ids = customers_df['client_id'].unique()
+    product_ids = products_df['product_id'].unique()
+    years = transactions_df['year'].unique()
+    weeks = range(1, 53)  # Assuming up to 52 weeks in a year, adjust if needed
     
+    # Se crea el producto cartesiano de todas las combinaciones cliente-producto-año-semana
+    all_combinations = pd.DataFrame(
+        list(itertools.product(customer_ids, product_ids, years, weeks)),
+        columns=['client_id', 'product_id', 'year', 'week_of_year']
+    )
+    
+    # Se realiza un merge con las transacciones agregadas para obtener los datos completos
+    complete_data = pd.merge(
+        all_combinations, 
+        transactions_df, 
+        how='left', 
+        on=['client_id', 'product_id', 'year', 'week_of_year']
+    )
+    
+    # Para las columnas de cantidad de productos pedidos y número de pedidos, se rellenan los valores NaN con 0
+    complete_data['quantity_ordered'].fillna(0, inplace=True)
+    complete_data['orders_count'].fillna(0, inplace=True)
+
     print("Datos estandarizados y preparados correctamente.")
     
-    return preprocessed_data
+    return complete_data
 
 def detect_data_drift(**kwargs):
     """
@@ -88,8 +108,6 @@ def detect_data_drift(**kwargs):
     ti = kwargs['ti']
     
     print("Detectando drift de datos...")
-
-    historical_data 
     
     new_data = ti.xcom_pull(task_ids='standardize_and_prepare_data')
 
@@ -103,6 +121,26 @@ def detect_data_drift(**kwargs):
     print("Detección de drift completada.")
     
     return drift_results
+
+def choose_drift_branch(**kwargs):
+    """
+    Elige la rama del DAG según si se detecta drift de datos o no.
+    Si se detecta drift, retorna 'retrain_model', de lo contrario, retorna 'skip_training'.
+    """
+    ti = kwargs['ti']
+    
+    print("Eligiendo rama según detección de drift...")
+
+    drift_detected = ti.xcom_pull(task_ids='detect_data_drift', key='drift_detected')
+    
+    if drift_detected:
+        print("Drift detectado, se reentrenará el modelo.")
+        return 'retrain_model'
+    else:
+        print("No se detectó drift, se saltará el entrenamiento del modelo.")
+        return 'skip_training'
+    
+def split_data(**kwargs):
 
 def optimize_model(**kwargs):
     """
