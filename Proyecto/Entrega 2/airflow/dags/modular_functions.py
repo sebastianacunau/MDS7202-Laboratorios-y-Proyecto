@@ -1,15 +1,19 @@
 
 import pandas as pd
 import os
-import itertools
-
-from sklearn.preprocessing import StandardScaler
+import ks_2samp
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from XGBoost import XGBClassifier
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_curve, log_loss
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_curve
+import optuna
+import joblib
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, KBinsDiscretizer
+from sklearn.impute import SimpleImputer
+from optuna.pruners import MedianPruner
+import shap
+
 
 
 def retrieve_data(**kwargs):
@@ -60,28 +64,28 @@ def standardize_and_prepare_data(**kwargs):
     ti = kwargs['ti']
 
     print("Estandarizando y preparando los datos...")
-
+#se abren los datasets dede el retrive data
     transactions_df = ti.xcom_pull(task_ids='retrieve_data', key='transactions')
     customers_df = ti.xcom_pull(task_ids='retrieve_data', key='customers')
     products_df = ti.xcom_pull(task_ids='retrieve_data', key='products')
-
+#se moifican las columnas en datetime
     transactions_df['purchase_date'] = pd.to_datetime(transactions_df['purchase_date'])
     transactions_df['año'] = transactions_df['purchase_date'].dt.year
     transactions_df['semana'] = transactions_df['purchase_date'].dt.isocalendar().week
-
+#se elimanan duplicados
     transactions_df = transactions_df.drop_duplicates()
     customers_df = customers_df.drop_duplicates()
     products_df = products_df.drop_duplicates()
-
+# se botan las columnas que no aportan infromacion variable, (nunique = 1)
     if 'num_visit_per_week' in customers_df.columns:
         customers_df = customers_df.drop(columns=['num_visit_per_week', 'region_id', 'zone_id'], errors='ignore')
-
+# se genera el dataset total para luego agrupar por tuplas
     df = transactions_df.merge(customers_df, on='customer_id', how='left')
     df = df.merge(products_df, on='product_id', how='left')
-
+#dataset agrupado 
     df_agrupado = df.groupby(['customer_id', 'product_id', 'semana', 'año'])['order_id'].count().reset_index()
     df_agrupado.rename(columns={'order_id': 'cantidad_order'}, inplace=True)
-
+#se inicia construccion dataset con cada combinacion cliente-producto-semana posible, ya que año es fijo pero en el futuro no sera
     customer_unicos = df['customer_id'].unique()
     productos_unicos = df['product_id'].unique()
     semanas_unicas = df['semana'].unique()
@@ -91,15 +95,15 @@ def standardize_and_prepare_data(**kwargs):
     productos_unicos_df = pd.DataFrame({'product_id': productos_unicos})
     semanas_unicas_df = pd.DataFrame({'semana': semanas_unicas})
     año_unicos_df = pd.DataFrame({'año': año_unicos})
-
+# se realiza merge para crear dataframe
     combinaciones = customer_unicos_df.merge(productos_unicos_df, how='cross')
     combinaciones = combinaciones.merge(semanas_unicas_df, how='cross')
     combinaciones = combinaciones.merge(año_unicos_df, how='cross')
-
+    #se crea el label de comprar o no comprar
     data = combinaciones.merge(df_agrupado, on=['customer_id', 'product_id', 'semana', 'año'], how='left')
     data['cantidad_order'] = data['cantidad_order'].fillna(0)
     data['label'] = (data['cantidad_order'] > 0).astype(int)
-
+#e hace merge para adicionar las variables restantes
     data_final = data.merge(customers_df, on='customer_id', how='left')
     data_final = data_final.merge(products_df, on='product_id', how='left')
 
@@ -116,7 +120,7 @@ def detect_data_drift(**kwargs):
     ti = kwargs['ti']
     new_data = ti.xcom_pull(task_ids='standardize_and_prepare_data')
     reference_data = new_data.sample(n=min(1000, len(new_data)), random_state=42)
-
+# realiza test de hipotesis para ver si se puede rechazar la hipotesis de que no hay drift
     drift_detected = False
     drifted_features = []
 
@@ -132,7 +136,7 @@ def detect_data_drift(**kwargs):
     return drift_detected
 
 
-
+#----------------------------------------------------------------------------------
 def choose_drift_branch(**kwargs):
     """
     Elige la rama del DAG según si se detecta drift de datos o no.
@@ -148,7 +152,7 @@ def choose_drift_branch(**kwargs):
     print(f"Resultado de branching: {branch}")
     return branch
 
-
+#--------------------------------------------------------------------------------------------
     
 def split_data(**kwargs):
     """
@@ -160,17 +164,16 @@ def split_data(**kwargs):
     ti = kwargs['ti']
     data = ti.xcom_pull(task_ids='standardize_and_prepare_data')
 
-    # 1. División principal: 70% train, 30% val+test
+    # División principal: 70% train, 30% val+test
     train_data, val_test_data = train_test_split(
         data, test_size=0.3, random_state=42, shuffle=False
     )
 
-    # 2. División secundaria: 15% val, 15% test
+    # División secundaria: 15% val, 15% test
     val_data, test_data = train_test_split(
         val_test_data, test_size=0.5, random_state=42, shuffle=False
     )
 
-    # Features y etiquetas
     drop_cols = ['label', 'product_id', 'customer_id']
     target_col = 'label'
 
@@ -183,7 +186,7 @@ def split_data(**kwargs):
     X_test = test_data.drop(columns=drop_cols)
     y_test = test_data[target_col]
 
-    # Guardar en XCom
+    
     ti.xcom_push(key='X_train', value=X_train)
     ti.xcom_push(key='X_val', value=X_val)
     ti.xcom_push(key='X_test', value=X_test)
@@ -199,31 +202,18 @@ def optimize_model(**kwargs):
     Optimiza hiperparámetros de un RandomForestClassifier usando Optuna.
     Guarda el mejor modelo (pipeline completo) en airflow/models/best_model.pkl
     """
-    import optuna
-    import joblib
-    import os
-    from sklearn.pipeline import Pipeline
-    from sklearn.compose import ColumnTransformer
-    from sklearn.preprocessing import StandardScaler, OneHotEncoder, KBinsDiscretizer
-    from sklearn.impute import SimpleImputer
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.metrics import f1_score
-    from sklearn.model_selection import train_test_split
-    from optuna.pruners import MedianPruner
-
     ti = kwargs["ti"]
     
-    # Extraer conjuntos desde XCom
     X_train = ti.xcom_pull(task_ids='split_data', key='X_train')
     y_train = ti.xcom_pull(task_ids='split_data', key='y_train')
     X_val   = ti.xcom_pull(task_ids='split_data', key='X_val')
     y_val   = ti.xcom_pull(task_ids='split_data', key='y_val')
 
-    # Reducimos X_train pero estratificado (solo para optimizar velocidad)
+    # Reducimos X_train pero estratificado con y_train para mantener proprociones iniciales
     X_train_sub, _, y_train_sub, _ = train_test_split(
         X_train, y_train, train_size=0.2, stratify=y_train, random_state=42
     )
-
+#funcion para optimizar preprocessor
     def cambios_preprocessor(n_bins, X_subset):
         cat = X_subset.select_dtypes(include=['object']).columns.tolist()
         num = X_subset.select_dtypes(include=['int64', 'int32', 'UInt32']).columns.tolist()
@@ -247,7 +237,7 @@ def optimize_model(**kwargs):
             ('cat', cat_pipeline, cat)
         ])
         return preprocessor
-
+#funcion objetivo optuna con hiperparametros a optimizar
     def objective(trial):
         n_bins       = trial.suggest_int("n_bins", 3, 8)
         n_estimators = trial.suggest_int("n_estimators", 50, 100, step=10)
@@ -275,20 +265,20 @@ def optimize_model(**kwargs):
         pipeline.fit(X_train_sub, y_train_sub)
         y_pred = pipeline.predict(X_val)
         f1 = f1_score(y_val, y_pred, pos_label=1, average='weighted')
-
+#habilitamos pruning
         trial.report(f1, step=0)
         if trial.should_prune():
             raise optuna.exceptions.TrialPruned()
 
         return f1
-
+#se crea el estudio maimizando la f1 score
     study = optuna.create_study(
         direction="maximize",
-        pruner=MedianPruner(n_startup_trials=3)
+        pruner=MedianPruner(n_startup_trials=3)# se habilita median pruning desde el 3er trial
     )
     study.optimize(objective, n_trials=20)
 
-    # Reentrenar con el mejor modelo usando todo X_train
+    # Reentrenar con el mejor modelo usando todo X_train junto a los parametros optimizados
     best_params = study.best_params
     print("Mejores parámetros encontrados:", best_params)
 
@@ -309,7 +299,7 @@ def optimize_model(**kwargs):
     ])
     best_pipeline.fit(X_train, y_train)
 
-    # Guardar el modelo completo
+    # Guardar el modelo completo como pipeline para mejorar su implemnetacion en otros tasks
     path = os.path.join("airflow", "models", "best_model.pkl")
     joblib.dump(best_pipeline, path)
     print(f"Modelo optimizado guardado en: {path}")
@@ -317,30 +307,13 @@ def optimize_model(**kwargs):
     return best_pipeline
 
 
-def train_model(**kwargs):
-    """
-    Entrena un modelo de machine learning (RandomForest, DecisionTree o LogisticRegression)
-    utilizando los datos preprocesados y retorna el modelo entrenado.
-    """
-    ti = kwargs['ti']
-    
-    print("Entrenando el modelo...")
 
-    preprocessed_data = ti.xcom_pull(task_ids='standardize_and_prepare_data')
-    
-    # Aquí hay que implementar la lógica para entrenar el modelo.
-    
-    model = ...  # Reemplazar con el modelo entrenado
-    
-    print("Modelo entrenado correctamente.")
-    
-    return model
 
 def interpret_model(**kwargs):
     ti = kwargs['ti']
     model = ti.xcom_pull(task_ids='optimize_model')
     X_val = ti.xcom_pull(task_ids='split_data', key='X_val')
-
+#se realiza interpretacion mediante shap y se guarda el shap_summary_plot.png
     X_val_transformed = model.named_steps['preprocessor'].transform(X_val)
     explainer = shap.Explainer(model.named_steps['modelo'], X_val_transformed)
     shap_values = explainer(X_val_transformed)
@@ -350,20 +323,19 @@ def interpret_model(**kwargs):
     shap.summary_plot(shap_values, show=False)
     plt.savefig(path)
     print(f"Gráfico SHAP guardado en: {path}")
-
+#se logea con mlflow
     mlflow.set_experiment("SodAI_Model_Experiments")
     with mlflow.start_run(run_name="SHAP_Interpretation"):
         mlflow.log_artifact(path)
-    
     return interpretations
+
+#---------------------------------------------
 def evaluate_model(**kwargs):
     ti = kwargs['ti']
     pipeline = ti.xcom_pull(task_ids='optimize_model')
     X_test = ti.xcom_pull(task_ids='split_data', key='X_test')
     y_test = ti.xcom_pull(task_ids='split_data', key='y_test')
-
-    
-
+#evaua en el set de testeo
     y_pred = pipeline.predict(X_test)
 
     results = {
@@ -373,7 +345,7 @@ def evaluate_model(**kwargs):
         "f1_score": f1_score(y_test, y_pred, average='weighted'),
         
     }
-
+#se logean las metricas alcanzadas, todas weighted para ver comportamiento general del modelo
     mlflow.set_experiment("SodAI_Model_Experiments")
     with mlflow.start_run(run_name="Evaluate_Model"):
         mlflow.log_metrics(results)
@@ -382,7 +354,7 @@ def evaluate_model(**kwargs):
     for k, v in results.items():
         print(f"{k}: {v:.4f}")
 
-
+#-----------------------------------------------------
 def generate_predictions(**kwargs):
     """
     Genera un archivo CSV con los pares cliente-producto que tienen predicción positiva (label=1)
@@ -412,10 +384,10 @@ def generate_predictions(**kwargs):
     # Generar predicciones
     preds = model.predict(features)
 
-    # Filtrar solo predicciones positivas (label=1)
+    # Filtrar solo predicciones positivas
     positive_preds = ids[preds == 1]
 
-    # Guardar CSV
+    # Guardar CSV con predicciones positivas
     output_path = os.path.join("airflow", "predictions", "positive_predictions.csv")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     positive_preds.to_csv(output_path, index=False)
