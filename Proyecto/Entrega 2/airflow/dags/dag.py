@@ -1,15 +1,22 @@
 from airflow import DAG
-
-from airflow.operators.python import PythonOperator
+from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.operators.empty import EmptyOperator
-from airflow.operators.bash import BashOperator
-from airflow.operators.branch import BranchPythonOperator
 from airflow.utils.dates import days_ago
-
 from datetime import datetime, timedelta
 
-from modular_functions import retrieve_data, standardize_and_prepare_data, detect_data_drift, choose_drift_branch, optimize_model, train_model, interpret_model, evaluate_model
+from modular_functions import (
+    retrieve_data,
+    standardize_and_prepare_data,
+    detect_data_drift,
+    choose_drift_branch,
+    split_data,
+    optimize_model,
+    interpret_model,
+    evaluate_model,
+    generate_predictions
+)
 
+# Definición de argumentos por defecto del DAG
 default_args = {
     'owner': 'deep_drinkers',
     'retries': 1,
@@ -21,12 +28,12 @@ with DAG(
     dag_id = "productive_pipeline_for_predictions_with_data_drift_detection",
     default_args=default_args,
     schedule_interval="@daily",  # Se ejecuta diariamente
-    catchup=True,  # Habilita backfill
+    catchup=False, 
     description="Pipeline productivo para predicciones con detección de drift de datos",
 ) as dag:
     
     # Tarea 1: Iniciar el DAG
-    inicio = EmptyOperator(task_id="start_pipeline")
+    start_pipeline = EmptyOperator(task_id="start_pipeline")
 
     # Tarea 2: Recuperar datos
     task_retrieve_data = PythonOperator(
@@ -43,84 +50,64 @@ with DAG(
     )
 
     # Tarea 4: Detectar drift de datos
-    task_detect_data_drift = PythonOperator(
+    task_detect_drift = PythonOperator(
         task_id="detect_data_drift",
         python_callable=detect_data_drift,
         provide_context=True,
     )
 
-    # Tarea 4: Branching para decidir si se reentrena el modelo o no
-    branch = BranchPythonOperator(
+    # Tarea 5: Branching para decidir si se reentrena el modelo o no
+    task_branch = BranchPythonOperator(
         task_id="branching",
         python_callable=choose_drift_branch,
         provide_context=True,
     )
 
-    # Tarea 5.a: Si se detecta drift, reentrenar el modelo
-    task_retrain_model = PythonOperator(
-        task_id="retrain_model",
-        python_callable=optimize_model,
-        provide_context=True,
-    )
+    # Tarea 5.a: Si no se detecta drift, saltar el entrenamiento
+    task_skip_training = EmptyOperator(task_id="skip_training")
 
-    # Tarea 5.a.1: Dividir los datos en entrenamiento y prueba
+    # Tarea 5.b.1: Dividir los datos en entrenamiento y prueba
     task_split_data = PythonOperator(
         task_id="split_data",
         python_callable=split_data, 
         provide_context=True,
     )
 
-    # Tarea 5.a.2: Entrenar modelos paralelamente
-    tasks_train_models = []
-    model_types = ['RandomForest', 'DecisionTree', 'LogisticRegression']
-    for model_type in model_types:
-        task_train_model = PythonOperator(
-            task_id=f"train_model_{model_type}",
-            python_callable=train_model,
-            op_args=[model_type, f"{model_type.lower()}_model.pkl"],
-            provide_context=True,
-        )
-        tasks_train_models.append(task_train_model)
-
-    # Configurar las tareas de entrenamiento en paralelo
-    for i in range(len(tasks_train_models) - 1):
-        tasks_train_models[i] >> tasks_train_models[i + 1]
-
-    # Tarea 5.a.3: Optimizar el modelo
+    # Tarea 5.b.2: Optimizar el modelo
     task_optimize_model = PythonOperator(
         task_id="optimize_model",
         python_callable=optimize_model,
         provide_context=True,
     )
 
-    # Tarea 5.b: Si no se detecta drift, saltar el entrenamiento
-    task_skip_training = EmptyOperator(task_id="skip_training")
-
-    # Tarea 6: Predecir con el modelo
-    task_predict = PythonOperator(
-        task_id="predict",
-        python_callable=train_model,
-        provide_context=True,
-    )
-
-    # Tarea 7: Evaluar el modelo
+    # Tarea 6: Evaluar el modelo
     task_evaluate_model = PythonOperator(
         task_id="evaluate_model",
         python_callable=evaluate_model,
         provide_context=True,
     )
 
-    # Tarea 8: Interpretar el modelo
+    # Tarea 7: Interpretar el modelo
     task_interpret_model = PythonOperator(
         task_id="interpret_model",
         python_callable=interpret_model,
         provide_context=True,
     )
 
+    # Tarea 8: Generar predicciones
+    task_generate_predictions = PythonOperator(
+    task_id="generate_predictions",
+    python_callable=generate_predictions,
+    provide_context=True,
+    )
+
     # Tarea 9: Finalizar el DAG
-    task_end = EmptyOperator(task_id="end_pipeline")
+    end_pipeline = EmptyOperator(task_id="end_pipeline")
 
     # Definir el flujo
-    inicio >> task_retrieve_data >> task_standardize_and_prepare >> task_detect_data_drift >> branch
-    branch >> task_split_data >> tasks_train_models >> task_predict >> task_evaluate_model >> task_interpret_model >> task_end
-    branch >> task_skip_training >> task_predict >> task_evaluate_model >> task_interpret_model >> task_end
+    start_pipeline >> task_retrieve_data >> task_standardize_and_prepare >> task_detect_drift >> task_branch
+    
+    task_branch >> task_skip_training >> task_generate_predictions >> task_evaluate_model >> task_interpret_model >> end_pipeline
+
+    task_branch >> task_split_data >> task_optimize_model >> task_generate_predictions
+    task_generate_predictions >> task_evaluate_model >> task_interpret_model >> end_pipeline
